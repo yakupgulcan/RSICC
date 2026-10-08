@@ -392,7 +392,14 @@ def get_eval_score(references, hypotheses):
     score = []
     method = []
     for scorer, method_i in scorers:
-        score_i, scores_i = scorer.compute_score(ref, hypo)
+        try:
+            score_i, scores_i = scorer.compute_score(ref, hypo)
+        except Exception as e:
+            print("Warning: {} evaluation failed: {}. Continuing with 0.0".format(method_i, e))
+            if isinstance(method_i, list):
+                score_i = [0.0] * len(method_i)
+            else:
+                score_i = 0.0
         score.extend(score_i) if isinstance(score_i, list) else score.append(score_i)
         method.extend(method_i) if isinstance(method_i, list) else method.append(method_i)
         print("{} {}".format(method_i, score_i))

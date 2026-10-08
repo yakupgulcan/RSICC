@@ -1,4 +1,6 @@
 .venv/
-Levir_CC_dataset/*
-data/*
+Levir_CC_dataset/
+data/
 __pycache__/
+models_checkpoint/
+*.zip
