@@ -17,7 +17,10 @@ class CNN_Encoder(nn.Module):
 
         if 'resnet' in NetType:
             # raise ValueError('Feature extraction only supports ResNets')
-            cnn = getattr(torchvision.models,NetType)(pretrained=True)
+            try:
+                cnn = getattr(torchvision.models, NetType)(weights='DEFAULT')
+            except (TypeError, ValueError):
+                cnn = getattr(torchvision.models, NetType)(pretrained=True)
             layers = [
                 cnn.conv1,
                 cnn.bn1,
@@ -32,11 +35,17 @@ class CNN_Encoder(nn.Module):
                 layers.append(getattr(cnn, name))
             self.net = nn.Sequential(*layers)
         if 'vgg' in NetType:
-            net = torchvision.models.vgg16(pretrained=True)
+            try:
+                net = torchvision.models.vgg16(weights='DEFAULT')
+            except (TypeError, ValueError):
+                net = torchvision.models.vgg16(pretrained=True)
             modules = list(net.children())[:-1]
             self.net = nn.Sequential(*modules)
         if 'vit' in NetType:  # "vit_b_16"
-            net = getattr(torchvision.models,NetType)(pretrained=True)
+            try:
+                net = getattr(torchvision.models, NetType)(weights='DEFAULT')
+            except (TypeError, ValueError):
+                net = getattr(torchvision.models, NetType)(pretrained=True)
             self.net = net
 
         # Resize image to fixed size to allow input images of variable size
@@ -50,7 +59,6 @@ class CNN_Encoder(nn.Module):
         :param images: images, a tensor of dimensions (batch_size, 3, image_size, image_size)
         :return: encoded images [batch_size, encoded_image_size=14, encoded_image_size=14, 2048]
         """
-        self.NetType = 'resnet'
         if 'resnet' in self.NetType:
             out = self.net(images)  # (batch_size, 2048, image_size/32, image_size/32)
             out = self.adaptive_pool(out)  # [batch_size, 2048/512, 8, 8] -> [batch_size, 2048/512, 14, 14]

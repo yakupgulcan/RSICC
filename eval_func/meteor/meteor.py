@@ -19,7 +19,7 @@ class Meteor:
     def __init__(self):
         self.env = os.environ
         self.env['LC_ALL'] = 'en_US.UTF_8'
-        self.meteor_cmd = ['java', '-jar', '-Xmx2G', METEOR_JAR, \
+        self.meteor_cmd = ['java', '-Duser.language=en', '-Duser.country=US', '-jar', '-Xmx2G', METEOR_JAR, \
                            '-', '-', '-stdio', '-l', 'en', '-norm']
         self.meteor_p = subprocess.Popen(self.meteor_cmd, \
                                          cwd=os.path.dirname(os.path.abspath(__file__)), \
@@ -43,6 +43,7 @@ class Meteor:
 
         # Send to METEOR
         self.meteor_p.stdin.write(eval_line + '\n')
+        self.meteor_p.stdin.flush()
 
         # Collect segment scores
         for i in range(len(res)):
@@ -63,6 +64,7 @@ class Meteor:
         hypothesis_str = hypothesis_str.replace('|||', '').replace('  ', ' ')
         score_line = ' ||| '.join(('SCORE', ' ||| '.join(reference_list), hypothesis_str))
         self.meteor_p.stdin.write(score_line + '\n')
+        self.meteor_p.stdin.flush()
         return self.meteor_p.stdout.readline().strip()
 
     def __del__(self):

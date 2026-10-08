@@ -39,7 +39,8 @@ def save_captions(args, word_map, hypotheses):
         line_hypo += "\r\n"
 
     print(result_json_file)
-    with open('eval_results/'+'/'+args.encoder_image + "_" +args.encoder_feat+"_" +args.decoder + '_res.json', 'w') as f:
+    os.makedirs('eval_results', exist_ok=True)
+    with open(os.path.join('eval_results', args.encoder_image + "_" + args.encoder_feat + "_" + args.decoder + '_res.json'), 'w') as f:
         json.dump(result_json_file, f)
 
 
@@ -215,7 +216,7 @@ if __name__ == '__main__':
     parser.add_argument('--img_A',  default='./Example/A/train_000016.png')
     parser.add_argument('--img_B',  default='./Example/B/train_000016.png')
     parser.add_argument('--data_folder', default="./data/",help='folder with data files saved by create_input_files.py.')
-    parser.add_argument('--data_name', default="Levir_CC_5_cap_per_img_5_min_word_freq",help='base name shared by data files.')
+    parser.add_argument('--data_name', default="LEVIR_CC_5_cap_per_img_5_min_word_freq",help='base name shared by data files.')
 
     parser.add_argument('--encoder_image', default="resnet101") # inception_v3 or vgg16 or vgg19 or resnet50 or resnet101 or resnet152
     parser.add_argument('--encoder_feat', default="MCCFormers_diff_as_Q") # MCCFormers-S or MCCFormers-D
@@ -237,7 +238,10 @@ if __name__ == '__main__':
         print(args.path + filename[i])
 
         # Load model
-        checkpoint = torch.load(checkpoint_path, map_location=str(device))
+        try:
+            checkpoint = torch.load(checkpoint_path, map_location=str(device), weights_only=False)
+        except TypeError:
+            checkpoint = torch.load(checkpoint_path, map_location=str(device))
         encoder_image = checkpoint['encoder_image']
         encoder_feat = checkpoint['encoder_feat']
         decoder = checkpoint['decoder']
