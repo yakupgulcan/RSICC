@@ -248,7 +248,7 @@ def evaluate_transformer(args,encoder_image,encoder_feat,decoder):
                         nochange_acc = nochange_acc+1
 
         # captions
-        # save_captions(args, word_map, hypotheses, references)
+        save_captions(args, word_map, hypotheses, references)
 
     print('len(nochange_references):', len(nochange_references))
     print('len(change_references):', len(change_references))
@@ -264,6 +264,12 @@ def evaluate_transformer(args,encoder_image,encoder_feat,decoder):
     print(".......................................................")
     metrics = get_eval_score(references, hypotheses)
 
+    out_dir = os.path.join('eval_results_fortest', args.Split)
+    os.makedirs(out_dir, exist_ok=True)
+    scores_path = os.path.join(out_dir, args.encoder_image + "_" + args.encoder_feat + "_" + args.decoder + '_scores.json')
+    serializable_metrics = {k: float(v) if hasattr(v, 'item') or isinstance(v, (float, int)) else v for k, v in metrics.items()}
+    with open(scores_path, 'w') as f:
+        json.dump(serializable_metrics, f, indent=4)
 
     return metrics
 
