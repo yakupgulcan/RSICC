@@ -44,10 +44,12 @@ def save_captions(args, word_map, hypotheses, references):
             reference_json_file[str(kkk)].append(line_repo)
             line_repo += "\r\n"
 
-    with open('eval_results_fortest/' + args.Split +'/'+args.encoder_image + "_" +args.encoder_feat+"_" +args.decoder + '_res.json', 'w') as f:
+    out_dir = os.path.join('eval_results_fortest', args.Split)
+    os.makedirs(out_dir, exist_ok=True)
+    with open(os.path.join(out_dir, args.encoder_image + "_" + args.encoder_feat + "_" + args.decoder + '_res.json'), 'w') as f:
         json.dump(result_json_file, f)
 
-    with open('eval_results_fortest/' + args.Split +'/'+ args.encoder_image + "_" +args.encoder_feat+"_" +args.decoder + '_gts.json', 'w') as f:
+    with open(os.path.join(out_dir, args.encoder_image + "_" + args.encoder_feat + "_" + args.decoder + '_gts.json'), 'w') as f:
         json.dump(reference_json_file, f)
 
 def get_key(dict_, value):
@@ -246,7 +248,7 @@ def evaluate_transformer(args,encoder_image,encoder_feat,decoder):
                         nochange_acc = nochange_acc+1
 
         # captions
-        # save_captions(args, word_map, hypotheses, references)
+        save_captions(args, word_map, hypotheses, references)
 
     print('len(nochange_references):', len(nochange_references))
     print('len(change_references):', len(change_references))
@@ -262,6 +264,12 @@ def evaluate_transformer(args,encoder_image,encoder_feat,decoder):
     print(".......................................................")
     metrics = get_eval_score(references, hypotheses)
 
+    out_dir = os.path.join('eval_results_fortest', args.Split)
+    os.makedirs(out_dir, exist_ok=True)
+    scores_path = os.path.join(out_dir, args.encoder_image + "_" + args.encoder_feat + "_" + args.decoder + '_scores.json')
+    serializable_metrics = {k: float(v) if hasattr(v, 'item') or isinstance(v, (float, int)) else v for k, v in metrics.items()}
+    with open(scores_path, 'w') as f:
+        json.dump(serializable_metrics, f, indent=4)
 
     return metrics
 
@@ -290,7 +298,10 @@ if __name__ == '__main__':
         print(args.path + filename[i])
 
         # Load model
-        checkpoint = torch.load(checkpoint_path, map_location=str(device))
+        try:
+            checkpoint = torch.load(checkpoint_path, map_location=str(device), weights_only=False)
+        except TypeError:
+            checkpoint = torch.load(checkpoint_path, map_location=str(device))
         encoder_image = checkpoint['encoder_image']
         encoder_feat = checkpoint['encoder_feat']
         decoder = checkpoint['decoder']

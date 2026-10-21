@@ -14,6 +14,8 @@ from datasets import *
 from utils import *
 from eval import evaluate_transformer
 
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
 
 def train(args, train_loader, encoder_image,encoder_feat, decoder, criterion, encoder_image_optimizer,encoder_image_lr_scheduler,encoder_feat_optimizer,encoder_feat_lr_scheduler, decoder_optimizer, decoder_lr_scheduler, epoch):
     """

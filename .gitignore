@@ -1,0 +1,9 @@
+.venv/
+Levir_CC_dataset/
+data/
+__pycache__/
+*.py[cod]
+models_checkpoint/
+*.zip
+eval_results_fortest/
+eval_results/*.json
