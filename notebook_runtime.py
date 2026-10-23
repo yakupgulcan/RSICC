@@ -1,5 +1,6 @@
 """Colab output streaming and explicit preprocessed-data restoration."""
 from pathlib import Path
+import codecs
 import shutil
 import subprocess
 import zipfile
@@ -9,19 +10,24 @@ def run_logged(command, log_path, cwd=None):
     """Display merged stdout/stderr and persist it; stop the child on interruption."""
     log_path = Path(log_path)
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    print(f"Starting: {' '.join(map(str, command))}", flush=True)
-    print(f"Log: {log_path}", flush=True)
-    with log_path.open('a', encoding='utf-8') as log:
+    with log_path.open('a', encoding='utf-8', newline='') as log:
         log.write(f"\nStarting: {command!r}\n")
         log.flush()
+        # Binary reads preserve tqdm's carriage returns; text mode translates
+        # them into newlines and makes every progress update a separate line.
         with subprocess.Popen(command, cwd=cwd, stdout=subprocess.PIPE,
-                              stderr=subprocess.STDOUT, text=True,
-                              encoding='utf-8', errors='replace', bufsize=1) as process:
+                              stderr=subprocess.STDOUT) as process:
             try:
-                for line in process.stdout:
-                    print(line, end='', flush=True)
-                    log.write(line)
+                decoder = codecs.getincrementaldecoder('utf-8')(errors='replace')
+                while chunk := process.stdout.read1(8192):
+                    output = decoder.decode(chunk)
+                    print(output, end='', flush=True)
+                    log.write(output)
                     log.flush()
+                output = decoder.decode(b'', final=True)
+                if output:
+                    print(output, end='', flush=True)
+                    log.write(output)
                 returncode = process.wait()
             except BaseException:
                 process.terminate()
@@ -33,7 +39,6 @@ def run_logged(command, log_path, cwd=None):
                 raise
     if returncode:
         raise subprocess.CalledProcessError(returncode, command)
-    print('Command completed.', flush=True)
 
 
 def required_data_files(directory, data_name):

@@ -12,6 +12,16 @@ from notebook_runtime import required_data_files, restore_preprocessed_data, run
 
 
 class NotebookRuntimeTests(unittest.TestCase):
+    def test_progress_carriage_returns_and_unicode_are_preserved(self):
+        with tempfile.TemporaryDirectory() as tmp, contextlib.redirect_stdout(io.StringIO()) as output:
+            path = Path(tmp) / 'train.log'
+            progress = '\rvalidation: 10%\rvalidation: 100% \u2588\n'
+            command = [sys.executable, '-u', '-c',
+                       f'import sys; sys.stdout.buffer.write({progress.encode("utf-8")!r}); sys.stdout.buffer.flush()']
+            run_logged(command, path)
+            self.assertEqual(output.getvalue(), progress)
+            self.assertTrue(path.read_bytes().endswith(progress.encode('utf-8')))
+
     def test_output_is_displayed_before_process_finishes_and_is_logged(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

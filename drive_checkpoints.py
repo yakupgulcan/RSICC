@@ -56,8 +56,8 @@ class DriveCheckpoints:
         while uploaded is None:
             status, uploaded = request.next_chunk(num_retries=3)
             if status is not None:
-                print(f'Drive upload {path.name}: {status.progress():.0%}', flush=True)
-        print(f'Verifying Drive checkpoint: {path.name}', flush=True)
+                print(f'\rDrive upload {path.name}: {status.progress():.0%}', end='', flush=True)
+        print(f'\rVerifying Drive checkpoint: {path.name}', flush=True)
         if int(uploaded.get('size', -1)) != path.stat().st_size or uploaded.get('md5Checksum') != checksum(path):
             raise RuntimeError('Drive upload verification failed; previous checkpoints were retained.')
         self.service.files().update(fileId=uploaded['id'], body={'name': path.name}, fields='id').execute()

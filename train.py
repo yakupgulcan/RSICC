@@ -277,21 +277,21 @@ def main(args):
         record = {'epoch': epoch + 1, 'metrics': {k: float(v) for k, v in metrics.items()},
                   'best_bleu4': float(best_bleu4),
                   'epochs_since_improvement': epochs_since_improvement}
-        print('Validation: ' + json.dumps(record), flush=True)
+        print(f'Epoch {epoch + 1}/{args.epochs}: '
+              + ' | '.join(f'{name}: {float(value):.4f}' for name, value in metrics.items()),
+              flush=True)
         os.makedirs(args.savepath, exist_ok=True)
         with open(os.path.join(args.savepath, 'training_metrics.jsonl'), 'a') as stream:
             stream.write(json.dumps(record) + '\n')
 
         # Save checkpoint
         checkpoint_name = args.encoder_image + '_'+args.encoder_feat + '_' + args.decoder #_tengxun_aggregation
-        print(f'Epoch {epoch + 1}: saving checkpoints...', flush=True)
         save_checkpoint(args, checkpoint_name, epoch, epochs_since_improvement, encoder_image,encoder_feat, decoder,
                         encoder_image_optimizer,encoder_feat_optimizer,decoder_optimizer, metrics, is_best,
                         schedulers={'encoder_image': encoder_image_lr_scheduler,
                                     'encoder_feat': encoder_feat_lr_scheduler,
                                     'decoder': decoder_lr_scheduler}, best_bleu4=best_bleu4,
                         drive_store=drive_store)
-        print(f'Epoch {epoch + 1}/{args.epochs} completed.', flush=True)
 
 
 if __name__ == '__main__':
