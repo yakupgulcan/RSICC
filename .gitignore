@@ -7,3 +7,4 @@ models_checkpoint/
 *.zip
 eval_results_fortest/
 eval_results/*.json
+.ipynb_checkpoints
