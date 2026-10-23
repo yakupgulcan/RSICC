@@ -124,6 +124,13 @@ def main(args):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")  # sets device for model and PyTorch tensors
     cudnn.benchmark = True  # set to true only if inputs to model are fixed size; otherwise lot of computational overhead
 
+    drive_store = None
+    if args.drive_checkpoint_folder_id:
+        if os.path.realpath(args.savepath).startswith('/content/drive/'):
+            raise ValueError('Drive API uploads require a local --savepath outside /content/drive.')
+        from drive_checkpoints import DriveCheckpoints
+        drive_store = DriveCheckpoints(args.drive_checkpoint_folder_id)
+
     # Read word map
     word_map_file = os.path.join(args.data_folder, 'WORDMAP_' + args.data_name + '.json')
     with open(word_map_file, 'r') as j:
@@ -169,6 +176,38 @@ def main(args):
     encoder_feat = encoder_feat.to(device)
     decoder = decoder.to(device)
 
+    if args.checkpoint:
+        # Existing RSICC checkpoints contain model and optimizer objects.
+        checkpoint = torch.load(args.checkpoint, map_location=device, weights_only=False)
+        encoder_image = checkpoint['encoder_image'].to(device)
+        encoder_feat = checkpoint['encoder_feat'].to(device)
+        decoder = checkpoint['decoder'].to(device)
+        encoder_image_optimizer = checkpoint['encoder_image_optimizer']
+        encoder_feat_optimizer = checkpoint['encoder_feat_optimizer']
+        decoder_optimizer = checkpoint['decoder_optimizer']
+        if args.fine_tune_encoder != (encoder_image_optimizer is not None):
+            raise ValueError('--fine_tune_encoder must match the checkpoint configuration.')
+        start_epoch = checkpoint['epoch'] + 1
+        epochs_since_improvement = checkpoint['epochs_since_improvement']
+        saved_score = checkpoint['bleu-4']
+        best_bleu4 = checkpoint.get('best_bleu4',
+                                    saved_score['Bleu_4'] if isinstance(saved_score, dict) else saved_score)
+        encoder_image_lr_scheduler = (StepLR(encoder_image_optimizer, step_size=900, gamma=1)
+                                      if encoder_image_optimizer is not None else None)
+        encoder_feat_lr_scheduler = StepLR(encoder_feat_optimizer, step_size=900, gamma=1)
+        decoder_lr_scheduler = StepLR(decoder_optimizer, step_size=900, gamma=1)
+        saved_schedulers = checkpoint.get('schedulers', {})
+        for name, scheduler in [('encoder_image', encoder_image_lr_scheduler),
+                                ('encoder_feat', encoder_feat_lr_scheduler),
+                                ('decoder', decoder_lr_scheduler)]:
+            if scheduler is not None and saved_schedulers.get(name) is not None:
+                scheduler.load_state_dict(saved_schedulers[name])
+        if not saved_schedulers:
+            print('Legacy checkpoint: scheduler counters restart (current StepLR gamma is 1).')
+        if args.epochs <= start_epoch:
+            raise ValueError(f'--epochs must exceed {start_epoch}; it is the total epoch target.')
+        print(f'Resuming at epoch {start_epoch + 1}; total epoch target: {args.epochs}.')
+
     print("Checkpoint_savepath:{}".format(args.savepath))
     print("Encoder_image_mode:{}   Encoder_feat_mode:{}   Decoder_mode:{}".format(args.encoder_image,args.encoder_feat,args.decoder))
     print("encoder_layers {} decoder_layers {} n_heads {} dropout {} encoder_lr {} "
@@ -191,7 +230,7 @@ def main(args):
     for epoch in range(start_epoch, args.epochs):
 
         # Decay learning rate if there is no improvement for x consecutive epochs, and terminate training after x
-        if epochs_since_improvement == args.stop_criteria:
+        if epochs_since_improvement >= args.stop_criteria:
             print("the model has not improved in the last {} epochs".format(args.stop_criteria))
             break
         if epochs_since_improvement > 0 and epochs_since_improvement % 3 == 0:
@@ -235,7 +274,11 @@ def main(args):
         # Save checkpoint
         checkpoint_name = args.encoder_image + '_'+args.encoder_feat + '_' + args.decoder #_tengxun_aggregation
         save_checkpoint(args, checkpoint_name, epoch, epochs_since_improvement, encoder_image,encoder_feat, decoder,
-                        encoder_image_optimizer,encoder_feat_optimizer,decoder_optimizer, metrics, is_best)
+                        encoder_image_optimizer,encoder_feat_optimizer,decoder_optimizer, metrics, is_best,
+                        schedulers={'encoder_image': encoder_image_lr_scheduler,
+                                    'encoder_feat': encoder_feat_lr_scheduler,
+                                    'decoder': decoder_lr_scheduler}, best_bleu4=best_bleu4,
+                        drive_store=drive_store)
 
 
 if __name__ == '__main__':
@@ -256,7 +299,7 @@ if __name__ == '__main__':
     parser.add_argument('--dropout', type=float, default=0.5, help='dropout')
 
     # Training parameters
-    parser.add_argument('--epochs', type=int, default=40, help='number of epochs to train for (if early stopping is not triggered).')
+    parser.add_argument('--epochs', type=int, default=40, help='total epoch target, including completed epochs when resuming (subject to early stopping).')
     parser.add_argument('--stop_criteria', type=int, default=10, help='training stop if epochs_since_improvement == stop_criteria')
     parser.add_argument('--batch_size', type=int, default=2, help='batch_size')
     parser.add_argument('--print_freq', type=int, default=100, help='print training/validation stats every __ batches.')
@@ -266,12 +309,14 @@ if __name__ == '__main__':
     parser.add_argument('--grad_clip', type=float, default=5., help='clip gradients at an absolute value of.')
     parser.add_argument('--fine_tune_encoder', type=bool, default=False, help='whether fine-tune encoder or not')
 
-    parser.add_argument('--checkpoint', default=None, help='path to checkpoint, None if none.')
+    parser.add_argument('--checkpoint', default=None, help='trusted RSICC checkpoint to resume; epochs is the total target.')
 
     # Validation
     parser.add_argument('--Split', default="VAL", help='which')
     parser.add_argument('--beam_size', type=int, default=1, help='beam_size.')
     parser.add_argument('--savepath', default="./models_checkpoint/")
+    parser.add_argument('--drive_checkpoint_folder_id', default=None,
+                        help='Drive folder ID for verified uploads and permanent replacement of previous checkpoints; requires local savepath.')
 
     args = parser.parse_args()
     main(args)

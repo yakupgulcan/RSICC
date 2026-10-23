@@ -271,9 +271,10 @@ def clip_gradient(optimizer, grad_clip):
 
 
 def save_checkpoint(args,data_name, epoch, epochs_since_improvement, encoder_image,encoder_feat, decoder,
-                    encoder_image_optimizer,encoder_feat_optimizer, decoder_optimizer,bleu4, is_best):
+                    encoder_image_optimizer,encoder_feat_optimizer, decoder_optimizer,bleu4, is_best,
+                    schedulers=None, best_bleu4=None, drive_store=None):
     """
-    Saves model checkpoint.
+    Saves the latest training checkpoint and updates the best checkpoint on improvement.
 
     :param data_name: base name of processed dataset
     :param epoch: epoch number
@@ -284,6 +285,9 @@ def save_checkpoint(args,data_name, epoch, epochs_since_improvement, encoder_ima
     :param decoder_optimizer: optimizer to update decoder's weights
     :param bleu4: validation BLEU-4 score for this epoch
     :param is_best: is this checkpoint the best so far?
+    :param schedulers: learning-rate schedulers whose states should be restored on resume
+    :param best_bleu4: best validation BLEU-4 across all completed epochs
+    :param drive_store: optional verified Drive checkpoint uploader
     """
     state = {'epoch': epoch,
              'epochs_since_improvement': epochs_since_improvement,
@@ -294,16 +298,23 @@ def save_checkpoint(args,data_name, epoch, epochs_since_improvement, encoder_ima
              'encoder_image_optimizer': encoder_image_optimizer,
              'encoder_feat_optimizer': encoder_feat_optimizer,
              'decoder_optimizer': decoder_optimizer,
+             'best_bleu4': best_bleu4 if best_bleu4 is not None else bleu4['Bleu_4'],
+             'schedulers': {name: scheduler.state_dict() if scheduler is not None else None
+                            for name, scheduler in (schedulers or {}).items()},
              }
     filename = 'checkpoint_' + data_name + '.pth.tar'
     path = args.savepath #'./models_checkpoint/mymodel/3-times/'
     if os.path.exists(path)==False:
         os.makedirs(path)
         # If this checkpoint is the best so far, store a copy so it doesn't get overwritten by a worse checkpoint
+    torch.save(state, os.path.join(path, filename))
+    if drive_store is not None:
+        drive_store.upload(os.path.join(path, filename))
     if is_best:
         torch.save(state, os.path.join(path, 'BEST_' + filename))
+        if drive_store is not None:
+            drive_store.upload(os.path.join(path, 'BEST_' + filename))
 
-    # torch.save(state, os.path.join(path, 'checkpoint_' + data_name +'_epoch_'+str(epoch) + '.pth.tar'))
 
 
 class AverageMeter(object):
