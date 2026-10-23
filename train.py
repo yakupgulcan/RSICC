@@ -108,9 +108,9 @@ def train(args, train_loader, encoder_image,encoder_feat, decoder, criterion, en
         batch_time.update(time.time() - start)
 
         start = time.time()
-        if i % args.print_freq == 0:
+        if i % args.print_freq == 0 or i == len(train_loader) - 1:
             # print('TIME: ', time.strftime("%m-%d  %H : %M : %S", time.localtime(time.time())))
-            print("Epoch: {}/{} step: {}/{} Loss: {} AVG_Loss: {} Top-5 Accuracy: {} Batch_time: {}s".format(epoch+0, args.epochs, i+0, len(train_loader), losses.val, losses.avg, top5accs.val, batch_time.val))
+            print("Epoch: {}/{} step: {}/{} Loss: {} AVG_Loss: {} Top-1 Accuracy: {} Batch_time: {}s".format(epoch+1, args.epochs, i+1, len(train_loader), losses.val, losses.avg, top5accs.val, batch_time.val), flush=True)
 
 
 
@@ -138,6 +138,7 @@ def main(args):
 
     # Initialize
     # Encoder
+    print('Initializing models and optimizers...', flush=True)
     encoder_image = CNN_Encoder(NetType=args.encoder_image, method=args.decoder)
     encoder_image.fine_tune(args.fine_tune_encoder)
 
@@ -225,6 +226,7 @@ def main(args):
     train_loader = torch.utils.data.DataLoader(
         CaptionDataset(args.data_folder, args.data_name, 'TRAIN', transform=transforms.Compose([normalize])),
         batch_size=args.batch_size, shuffle=True, num_workers=args.workers, pin_memory=True)
+    print(f'Training data: {len(train_loader)} batches per epoch; logging every {args.print_freq} batches.', flush=True)
 
     # Epochs
     for epoch in range(start_epoch, args.epochs):
@@ -256,6 +258,7 @@ def main(args):
               epoch=epoch)
 
         # One epoch's validation
+        print(f'Epoch {epoch + 1}/{args.epochs}: validating...', flush=True)
         metrics = evaluate_transformer(args,
                             encoder_image=encoder_image,
                             encoder_feat=encoder_feat,
@@ -271,14 +274,24 @@ def main(args):
         else:
             epochs_since_improvement = 0
 
+        record = {'epoch': epoch + 1, 'metrics': {k: float(v) for k, v in metrics.items()},
+                  'best_bleu4': float(best_bleu4),
+                  'epochs_since_improvement': epochs_since_improvement}
+        print('Validation: ' + json.dumps(record), flush=True)
+        os.makedirs(args.savepath, exist_ok=True)
+        with open(os.path.join(args.savepath, 'training_metrics.jsonl'), 'a') as stream:
+            stream.write(json.dumps(record) + '\n')
+
         # Save checkpoint
         checkpoint_name = args.encoder_image + '_'+args.encoder_feat + '_' + args.decoder #_tengxun_aggregation
+        print(f'Epoch {epoch + 1}: saving checkpoints...', flush=True)
         save_checkpoint(args, checkpoint_name, epoch, epochs_since_improvement, encoder_image,encoder_feat, decoder,
                         encoder_image_optimizer,encoder_feat_optimizer,decoder_optimizer, metrics, is_best,
                         schedulers={'encoder_image': encoder_image_lr_scheduler,
                                     'encoder_feat': encoder_feat_lr_scheduler,
                                     'decoder': decoder_lr_scheduler}, best_bleu4=best_bleu4,
                         drive_store=drive_store)
+        print(f'Epoch {epoch + 1}/{args.epochs} completed.', flush=True)
 
 
 if __name__ == '__main__':

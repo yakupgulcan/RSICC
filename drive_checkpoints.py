@@ -46,6 +46,7 @@ class DriveCheckpoints:
         from googleapiclient.http import MediaFileUpload
         path = Path(path)
         previous = self.files(path.name)
+        print(f'Uploading checkpoint to Drive: {path.name} ({path.stat().st_size / 1024**3:.2f} GiB)', flush=True)
         request = self.service.files().create(
             body={'name': path.name + '.upload-' + uuid.uuid4().hex,
                   'parents': [self.folder_id]},
@@ -53,7 +54,10 @@ class DriveCheckpoints:
             fields='id,size,md5Checksum')
         uploaded = None
         while uploaded is None:
-            _, uploaded = request.next_chunk(num_retries=3)
+            status, uploaded = request.next_chunk(num_retries=3)
+            if status is not None:
+                print(f'Drive upload {path.name}: {status.progress():.0%}', flush=True)
+        print(f'Verifying Drive checkpoint: {path.name}', flush=True)
         if int(uploaded.get('size', -1)) != path.stat().st_size or uploaded.get('md5Checksum') != checksum(path):
             raise RuntimeError('Drive upload verification failed; previous checkpoints were retained.')
         self.service.files().update(fileId=uploaded['id'], body={'name': path.name}, fields='id').execute()
