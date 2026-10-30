@@ -68,3 +68,6 @@ def restore_preprocessed_data(archive, destination, data_name):
             raise RuntimeError(f'Expected one complete preprocessed dataset for {data_name}; found {len(candidates)}.')
         for path in required_data_files(candidates[0], data_name):
             shutil.move(str(path), destination / path.name)
+        metadata = candidates[0] / 'preprocessing_config.json'
+        if metadata.is_file():
+            shutil.move(str(metadata), destination / metadata.name)

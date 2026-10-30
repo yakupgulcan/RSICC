@@ -6,7 +6,7 @@ import torch
 # from scipy.misc import imread, imresize
 from tqdm import tqdm
 from collections import Counter
-from random import seed, choice, sample
+from random import Random
 import imageio
 from PIL import Image
 
@@ -35,10 +35,9 @@ from cv2 import resize as imresize
 
 from tqdm import tqdm
 from collections import Counter
-from random import seed, choice, sample
 
 def create_input_files(dataset, karpathy_json_path, image_folder, captions_per_image, min_word_freq, output_folder,
-                       max_len=100):
+                       max_len=100, random_seed=123):
     """
     Creates input files for training, validation, and test data.
 
@@ -121,7 +120,7 @@ def create_input_files(dataset, karpathy_json_path, image_folder, captions_per_i
 
     # Sample captions for each image, save images to HDF5 file, and captions and their lengths to JSON files
     os.makedirs(output_folder, exist_ok=True)
-    seed(123)
+    rng = Random(random_seed)
     for impaths, imcaps, split in [(train_image_paths, train_image_captions, 'TRAIN'),
                                    (val_image_paths, val_image_captions, 'VAL'),
                                    (test_image_paths, test_image_captions, 'TEST')]:
@@ -145,9 +144,9 @@ def create_input_files(dataset, karpathy_json_path, image_folder, captions_per_i
 
                 # Sample captions
                 if len(imcaps[i]) < captions_per_image:
-                    captions = imcaps[i] + [choice(imcaps[i]) for _ in range(captions_per_image - len(imcaps[i]))]
+                    captions = imcaps[i] + [rng.choice(imcaps[i]) for _ in range(captions_per_image - len(imcaps[i]))]
                 else:
-                    captions = sample(imcaps[i], k=captions_per_image)
+                    captions = rng.sample(imcaps[i], k=captions_per_image)
 
                 # Sanity check
                 assert len(captions) == captions_per_image
@@ -290,6 +289,8 @@ def save_checkpoint(args,data_name, epoch, epochs_since_improvement, encoder_ima
     :param drive_store: optional verified Drive checkpoint uploader
     """
     state = {'epoch': epoch,
+             'seed': getattr(args, 'seed', None),
+             'deterministic': getattr(args, 'deterministic', False),
              'epochs_since_improvement': epochs_since_improvement,
              'bleu-4': bleu4,
              'encoder_image': encoder_image,

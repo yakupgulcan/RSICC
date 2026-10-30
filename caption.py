@@ -10,6 +10,7 @@ from utils import *
 import torch.nn.functional as F
 from tqdm import tqdm
 import argparse
+from reproducibility import add_seed_arguments, configure_randomness
 import time
 import cv2
 import numpy
@@ -225,7 +226,9 @@ if __name__ == '__main__':
     parser.add_argument('--epoch', default="epoch", help='which')
     parser.add_argument('--beam_size', type=int, default=1, help='beam_size.')
     parser.add_argument('--path', default="./models_checkpoint/", help='model checkpoint.') #  ./models_checkpoint/data/2-times/RSICCformer_D/Simis_baseline/
+    add_seed_arguments(parser)
     args = parser.parse_args()
+    configure_randomness(args.seed, args.deterministic)
 
 
     filename = os.listdir(args.path)

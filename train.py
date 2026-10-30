@@ -13,6 +13,7 @@ from models_RSICCformerDfusion import *
 from datasets import *
 from utils import *
 from eval import evaluate_transformer
+from reproducibility import add_seed_arguments, configure_randomness, seed_worker
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -122,7 +123,7 @@ def main(args):
     best_bleu4 = 0.  # BLEU-4 score right now
     epochs_since_improvement = 0  # keeps track of number of epochs since there's been an improvement in validation BLEU
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")  # sets device for model and PyTorch tensors
-    cudnn.benchmark = True  # set to true only if inputs to model are fixed size; otherwise lot of computational overhead
+    configure_randomness(args.seed, args.deterministic)
 
     drive_store = None
     if args.drive_checkpoint_folder_id:
@@ -225,7 +226,8 @@ def main(args):
     # If your data elements are a custom type, or your collate_fn returns a batch that is a custom type.
     train_loader = torch.utils.data.DataLoader(
         CaptionDataset(args.data_folder, args.data_name, 'TRAIN', transform=transforms.Compose([normalize])),
-        batch_size=args.batch_size, shuffle=True, num_workers=args.workers, pin_memory=True)
+        batch_size=args.batch_size, shuffle=True, num_workers=args.workers, pin_memory=True,
+        worker_init_fn=seed_worker if args.seed is not None else None)
     print(f'Training data: {len(train_loader)} batches per epoch; logging every {args.print_freq} batches.', flush=True)
 
     # Epochs
@@ -331,5 +333,6 @@ if __name__ == '__main__':
     parser.add_argument('--drive_checkpoint_folder_id', default=None,
                         help='Drive folder ID for verified uploads and permanent replacement of previous checkpoints; requires local savepath.')
 
+    add_seed_arguments(parser)
     args = parser.parse_args()
     main(args)
