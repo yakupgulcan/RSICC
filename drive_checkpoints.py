@@ -90,3 +90,25 @@ class DriveCheckpoints:
             temporary.replace(destination)
         finally:
             temporary.unlink(missing_ok=True)
+
+
+def resolve_folder(service, path, create=False):
+    """Drive folder ID for a path under /content/drive/MyDrive."""
+    folder_id = 'root'
+    for part in Path(path).relative_to('/content/drive/MyDrive').parts:
+        escaped = part.replace('\\', '\\\\').replace("'", "\\'")
+        matches = service.files().list(
+            q=f"'{folder_id}' in parents and name = '{escaped}' and "
+              "mimeType = 'application/vnd.google-apps.folder' and trashed = false",
+            fields='files(id)', pageSize=100).execute().get('files', [])
+        if len(matches) > 1:
+            raise RuntimeError(f'Multiple Drive folders named {part}; use a unique path.')
+        if matches:
+            folder_id = matches[0]['id']
+        elif create:
+            folder_id = service.files().create(
+                body={'name': part, 'mimeType': 'application/vnd.google-apps.folder', 'parents': [folder_id]},
+                fields='id').execute()['id']
+        else:
+            raise FileNotFoundError(path)
+    return folder_id

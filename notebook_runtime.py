@@ -71,3 +71,89 @@ def restore_preprocessed_data(archive, destination, data_name):
         metadata = candidates[0] / 'preprocessing_config.json'
         if metadata.is_file():
             shutil.move(str(metadata), destination / metadata.name)
+
+
+def sha256(path):
+    import hashlib
+    digest = hashlib.sha256()
+    with Path(path).open('rb') as stream:
+        for chunk in iter(lambda: stream.read(8 * 1024 * 1024), b''):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def fetch_archive(source, destination, log_path):
+    """Copy a local/Drive ZIP or download a share URL; returns (path, sha256)."""
+    import sys
+    source, destination = str(source), Path(destination)
+    if Path(source).is_file():
+        shutil.copy2(source, destination)
+    elif source.startswith(('https://', 'http://')):
+        gdown = [sys.executable, '-u', '-m', 'gdown']
+        # Older gdown needs --fuzzy for share links; newer versions parse them and reject the flag.
+        if '--fuzzy' in subprocess.check_output(gdown + ['--help'], text=True):
+            gdown.append('--fuzzy')
+        run_logged(gdown + [source, '-O', str(destination)], log_path)
+    else:
+        raise FileNotFoundError(f'Expected an existing ZIP path or download URL: {source}')
+    return destination, sha256(destination)
+
+
+def extract_raw_dataset(archive, destination):
+    """Extract a LEVIR-CC-layout ZIP; returns the folder holding the captions file and images/."""
+    with zipfile.ZipFile(archive) as zipped:
+        zipped.extractall(destination)
+    candidates = [p.parent for p in Path(destination).rglob('LevirCCcaptions.json')
+                  if (p.parent / 'images').is_dir()]
+    if len(candidates) != 1:
+        raise FileNotFoundError(f'Expected one LevirCCcaptions.json next to images/; found {len(candidates)}.')
+    return candidates[0]
+
+
+def start_run(run_dir, config, repo_dir='.'):
+    """Create the run folder and its single record, run.json."""
+    import json
+    import platform
+    import sys
+    from datetime import datetime, timezone
+    import torch
+    import torchvision
+
+    def git(*arguments):
+        return subprocess.check_output(['git', *arguments], cwd=repo_dir, text=True).strip()
+
+    run_dir = Path(run_dir)
+    run_dir.mkdir(parents=True, exist_ok=False)
+    record = {
+        'run_id': run_dir.name, 'status': 'running',
+        'started_utc': datetime.now(timezone.utc).isoformat(timespec='seconds'),
+        'code': {'repo_url': git('remote', 'get-url', 'origin'), 'commit': git('rev-parse', 'HEAD'),
+                 'uncommitted_changes': bool(git('status', '--porcelain'))},
+        'config': config,
+        'environment': {'python': platform.python_version(), 'torch': torch.__version__,
+                        'torchvision': torchvision.__version__, 'cuda_build': torch.version.cuda,
+                        'gpu': torch.cuda.get_device_name(0) if torch.cuda.is_available() else None},
+    }
+    (run_dir / 'run.json').write_text(json.dumps(record, indent=2, default=str))
+    (run_dir / 'packages.txt').write_text(
+        subprocess.check_output([sys.executable, '-m', 'pip', 'freeze'], text=True))
+    return record
+
+
+def update_run(run_dir, **fields):
+    """Merge fields into run.json and return the updated record."""
+    import json
+    path = Path(run_dir) / 'run.json'
+    record = json.loads(path.read_text())
+    record.update(fields)
+    path.write_text(json.dumps(record, indent=2, default=str))
+    return record
+
+
+def training_summary(metrics_path):
+    """Best-validation epoch and epoch count from training_metrics.jsonl."""
+    import json
+    records = [json.loads(line) for line in Path(metrics_path).read_text().splitlines() if line.strip()]
+    best = max(records, key=lambda r: r['metrics']['Bleu_4'])
+    return {'epochs_completed': records[-1]['epoch'], 'best_epoch': best['epoch'],
+            'best_validation': best['metrics']}
