@@ -13,6 +13,8 @@ from models_RSICCformerDfusion import *
 from datasets import *
 from utils import *
 from eval import evaluate_transformer
+from reproducibility import add_seed_arguments, configure_randomness, seed_worker
+from checkpoints import MODELS, build_models, model_settings, read_checkpoint, state_dicts
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -108,9 +110,9 @@ def train(args, train_loader, encoder_image,encoder_feat, decoder, criterion, en
         batch_time.update(time.time() - start)
 
         start = time.time()
-        if i % args.print_freq == 0:
+        if i % args.print_freq == 0 or i == len(train_loader) - 1:
             # print('TIME: ', time.strftime("%m-%d  %H : %M : %S", time.localtime(time.time())))
-            print("Epoch: {}/{} step: {}/{} Loss: {} AVG_Loss: {} Top-5 Accuracy: {} Batch_time: {}s".format(epoch+0, args.epochs, i+0, len(train_loader), losses.val, losses.avg, top5accs.val, batch_time.val))
+            print("Epoch: {}/{} step: {}/{} Loss: {} AVG_Loss: {} Top-1 Accuracy: {} Batch_time: {}s".format(epoch+1, args.epochs, i+1, len(train_loader), losses.val, losses.avg, top5accs.val, batch_time.val), flush=True)
 
 
 
@@ -122,7 +124,14 @@ def main(args):
     best_bleu4 = 0.  # BLEU-4 score right now
     epochs_since_improvement = 0  # keeps track of number of epochs since there's been an improvement in validation BLEU
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")  # sets device for model and PyTorch tensors
-    cudnn.benchmark = True  # set to true only if inputs to model are fixed size; otherwise lot of computational overhead
+    configure_randomness(args.seed, args.deterministic)
+
+    drive_store = None
+    if args.drive_checkpoint_folder_id:
+        if os.path.realpath(args.savepath).startswith('/content/drive/'):
+            raise ValueError('Drive API uploads require a local --savepath outside /content/drive.')
+        from drive_checkpoints import DriveCheckpoints
+        drive_store = DriveCheckpoints(args.drive_checkpoint_folder_id)
 
     # Read word map
     word_map_file = os.path.join(args.data_folder, 'WORDMAP_' + args.data_name + '.json')
@@ -131,25 +140,10 @@ def main(args):
 
     # Initialize
     # Encoder
-    encoder_image = CNN_Encoder(NetType=args.encoder_image, method=args.decoder)
+    print('Initializing models and optimizers...', flush=True)
+    settings = model_settings(args, len(word_map))
+    encoder_image, encoder_feat, decoder = build_models(settings)
     encoder_image.fine_tune(args.fine_tune_encoder)
-
-    # set the encoder_dim
-    encoder_image_dim = 1024 #resnet101
-
-    if args.encoder_feat == 'MCCFormers_diff_as_Q':
-        encoder_feat = MCCFormers_diff_as_Q(feature_dim=encoder_image_dim, dropout=0.5, h=14, w=14, d_model=512, n_head=args.n_heads,
-                               n_layers=args.n_layers)
-
-    # Decoder
-    args.feature_dim_de = 1024 # 当有concat是1024,否则为512
-    if args.decoder == 'trans':
-        decoder = DecoderTransformer(feature_dim=args.feature_dim_de,
-                                     vocab_size=len(word_map),
-                                     n_head=args.n_heads,
-                                     n_layers=args.decoder_n_layers,
-                                     dropout=args.dropout)
-
 
     encoder_image_optimizer = torch.optim.Adam(params=filter(lambda p: p.requires_grad, encoder_image.parameters()),
                                          lr=args.encoder_lr) if args.fine_tune_encoder else None
@@ -169,6 +163,33 @@ def main(args):
     encoder_feat = encoder_feat.to(device)
     decoder = decoder.to(device)
 
+    optimizers = {'encoder_image': encoder_image_optimizer, 'encoder_feat': encoder_feat_optimizer,
+                  'decoder': decoder_optimizer}
+    schedulers = {'encoder_image': encoder_image_lr_scheduler, 'encoder_feat': encoder_feat_lr_scheduler,
+                  'decoder': decoder_lr_scheduler}
+
+    if args.checkpoint:
+        checkpoint, legacy = read_checkpoint(args.checkpoint, device)
+        if legacy:
+            raise ValueError('This checkpoint predates weights-only checkpoints: it can be evaluated, '
+                             'but training cannot resume from it.')
+        if checkpoint['model_settings'] != settings:
+            raise ValueError(f"Model settings differ from the checkpoint: {checkpoint['model_settings']}")
+        for name, model in zip(MODELS, (encoder_image, encoder_feat, decoder)):
+            model.load_state_dict(checkpoint['models'][name])
+        for group, saved in ((optimizers, checkpoint['optimizers']), (schedulers, checkpoint['schedulers'])):
+            for name, target in group.items():
+                if (target is None) != (saved[name] is None):
+                    raise ValueError('--fine_tune_encoder must match the checkpoint configuration.')
+                if target is not None:
+                    target.load_state_dict(saved[name])
+        start_epoch = checkpoint['epoch'] + 1
+        epochs_since_improvement = checkpoint['epochs_since_improvement']
+        best_bleu4 = checkpoint['best_bleu4']
+        if args.epochs <= start_epoch:
+            raise ValueError(f'--epochs must exceed {start_epoch}; it is the total epoch target.')
+        print(f'Resuming at epoch {start_epoch + 1}; total epoch target: {args.epochs}.')
+
     print("Checkpoint_savepath:{}".format(args.savepath))
     print("Encoder_image_mode:{}   Encoder_feat_mode:{}   Decoder_mode:{}".format(args.encoder_image,args.encoder_feat,args.decoder))
     print("encoder_layers {} decoder_layers {} n_heads {} dropout {} encoder_lr {} "
@@ -185,13 +206,15 @@ def main(args):
     # If your data elements are a custom type, or your collate_fn returns a batch that is a custom type.
     train_loader = torch.utils.data.DataLoader(
         CaptionDataset(args.data_folder, args.data_name, 'TRAIN', transform=transforms.Compose([normalize])),
-        batch_size=args.batch_size, shuffle=True, num_workers=args.workers, pin_memory=True)
+        batch_size=args.batch_size, shuffle=True, num_workers=args.workers, pin_memory=True,
+        worker_init_fn=seed_worker if args.seed is not None else None)
+    print(f'Training data: {len(train_loader)} batches per epoch; logging every {args.print_freq} batches.', flush=True)
 
     # Epochs
     for epoch in range(start_epoch, args.epochs):
 
         # Decay learning rate if there is no improvement for x consecutive epochs, and terminate training after x
-        if epochs_since_improvement == args.stop_criteria:
+        if epochs_since_improvement >= args.stop_criteria:
             print("the model has not improved in the last {} epochs".format(args.stop_criteria))
             break
         if epochs_since_improvement > 0 and epochs_since_improvement % 3 == 0:
@@ -217,6 +240,7 @@ def main(args):
               epoch=epoch)
 
         # One epoch's validation
+        print(f'Epoch {epoch + 1}/{args.epochs}: validating...', flush=True)
         metrics = evaluate_transformer(args,
                             encoder_image=encoder_image,
                             encoder_feat=encoder_feat,
@@ -232,10 +256,25 @@ def main(args):
         else:
             epochs_since_improvement = 0
 
+        record = {'epoch': epoch + 1, 'metrics': {k: float(v) for k, v in metrics.items()},
+                  'best_bleu4': float(best_bleu4),
+                  'epochs_since_improvement': epochs_since_improvement}
+        print(f'Epoch {epoch + 1}/{args.epochs}: '
+              + ' | '.join(f'{name}: {float(value):.4f}' for name, value in metrics.items()),
+              flush=True)
+        os.makedirs(args.savepath, exist_ok=True)
+        with open(os.path.join(args.savepath, 'training_metrics.jsonl'), 'a') as stream:
+            stream.write(json.dumps(record) + '\n')
+
         # Save checkpoint
         checkpoint_name = args.encoder_image + '_'+args.encoder_feat + '_' + args.decoder #_tengxun_aggregation
-        save_checkpoint(args, checkpoint_name, epoch, epochs_since_improvement, encoder_image,encoder_feat, decoder,
-                        encoder_image_optimizer,encoder_feat_optimizer,decoder_optimizer, metrics, is_best)
+        state = {'epoch': epoch, 'seed': args.seed, 'deterministic': args.deterministic,
+                 'epochs_since_improvement': epochs_since_improvement,
+                 'metrics': record['metrics'], 'best_bleu4': float(best_bleu4),
+                 'model_settings': settings,
+                 'models': state_dicts(dict(zip(MODELS, (encoder_image, encoder_feat, decoder)))),
+                 'optimizers': state_dicts(optimizers), 'schedulers': state_dicts(schedulers)}
+        save_checkpoint(args, checkpoint_name, state, is_best, drive_store=drive_store)
 
 
 if __name__ == '__main__':
@@ -256,7 +295,7 @@ if __name__ == '__main__':
     parser.add_argument('--dropout', type=float, default=0.5, help='dropout')
 
     # Training parameters
-    parser.add_argument('--epochs', type=int, default=40, help='number of epochs to train for (if early stopping is not triggered).')
+    parser.add_argument('--epochs', type=int, default=40, help='total epoch target, including completed epochs when resuming (subject to early stopping).')
     parser.add_argument('--stop_criteria', type=int, default=10, help='training stop if epochs_since_improvement == stop_criteria')
     parser.add_argument('--batch_size', type=int, default=2, help='batch_size')
     parser.add_argument('--print_freq', type=int, default=100, help='print training/validation stats every __ batches.')
@@ -264,14 +303,18 @@ if __name__ == '__main__':
     parser.add_argument('--encoder_lr', type=float, default=1e-4, help='learning rate for encoder if fine-tuning.')
     parser.add_argument('--decoder_lr', type=float, default=1e-4, help='learning rate for decoder.')
     parser.add_argument('--grad_clip', type=float, default=5., help='clip gradients at an absolute value of.')
-    parser.add_argument('--fine_tune_encoder', type=bool, default=False, help='whether fine-tune encoder or not')
+    parser.add_argument('--fine_tune_encoder', type=lambda value: {'true': True, 'false': False}[value.lower()],
+                        default=False, help='true or false: whether to fine-tune the image encoder')
 
-    parser.add_argument('--checkpoint', default=None, help='path to checkpoint, None if none.')
+    parser.add_argument('--checkpoint', default=None, help='checkpoint to resume; epochs is the total target.')
 
     # Validation
     parser.add_argument('--Split', default="VAL", help='which')
     parser.add_argument('--beam_size', type=int, default=1, help='beam_size.')
     parser.add_argument('--savepath', default="./models_checkpoint/")
+    parser.add_argument('--drive_checkpoint_folder_id', default=None,
+                        help='Drive folder ID for verified uploads and permanent replacement of previous checkpoints; requires local savepath.')
 
+    add_seed_arguments(parser)
     args = parser.parse_args()
     main(args)

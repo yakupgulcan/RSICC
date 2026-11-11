@@ -1,0 +1,123 @@
+"""Verified checkpoint uploads with permanent replacement in one Drive folder."""
+import hashlib
+import re
+from pathlib import Path
+import uuid
+
+BS = chr(92)  # backslash, for escaping Drive query strings
+
+
+def drive_service():
+    import google.auth
+    from googleapiclient.discovery import build
+    credentials, _ = google.auth.default(scopes=['https://www.googleapis.com/auth/drive'])
+    return build('drive', 'v3', credentials=credentials, cache_discovery=False)
+
+
+def checksum(path):
+    digest = hashlib.md5()
+    with Path(path).open('rb') as stream:
+        for chunk in iter(lambda: stream.read(8 * 1024 * 1024), b''):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+class DriveCheckpoints:
+    def __init__(self, folder_id, service=None):
+        self.folder_id = folder_id
+        self.service = service if service is not None else drive_service()
+        folder = self.service.files().get(fileId=folder_id, fields='id,mimeType,trashed').execute()
+        if folder['mimeType'] != 'application/vnd.google-apps.folder' or folder.get('trashed'):
+            raise ValueError('Checkpoint destination must be an active Drive folder.')
+
+    def files(self, name):
+        if not re.fullmatch(r'(BEST_)?checkpoint_[A-Za-z0-9_]+\.pth\.tar', name):
+            raise ValueError('Only RSICC latest/best checkpoint filenames are managed.')
+        result, token = [], None
+        while True:
+            response = self.service.files().list(
+                q=f"'{self.folder_id}' in parents and name = '{name}' and trashed = false",
+                fields='nextPageToken,files(id,name,size,md5Checksum,parents)',
+                pageToken=token, pageSize=100).execute()
+            result.extend(response.get('files', []))
+            token = response.get('nextPageToken')
+            if not token:
+                return result
+
+    def upload(self, path):
+        from googleapiclient.http import MediaFileUpload
+        path = Path(path)
+        previous = self.files(path.name)
+        print(f'Uploading checkpoint to Drive: {path.name} ({path.stat().st_size / 1024**3:.2f} GiB)', flush=True)
+        request = self.service.files().create(
+            body={'name': path.name + '.upload-' + uuid.uuid4().hex,
+                  'parents': [self.folder_id]},
+            media_body=MediaFileUpload(str(path), resumable=True, chunksize=64 * 1024 * 1024),
+            fields='id,size,md5Checksum')
+        uploaded = None
+        while uploaded is None:
+            status, uploaded = request.next_chunk(num_retries=3)
+            if status is not None:
+                print(f'\rDrive upload {path.name}: {status.progress():.0%}', end='', flush=True)
+        print(f'\rVerifying Drive checkpoint: {path.name}', flush=True)
+        if int(uploaded.get('size', -1)) != path.stat().st_size or uploaded.get('md5Checksum') != checksum(path):
+            raise RuntimeError('Drive upload verification failed; previous checkpoints were retained.')
+        self.service.files().update(fileId=uploaded['id'], body={'name': path.name}, fields='id').execute()
+        for old in previous:
+            current = self.service.files().get(fileId=old['id'], fields='name,parents,trashed').execute()
+            if current['name'] != path.name or self.folder_id not in current.get('parents', []) or current.get('trashed'):
+                raise RuntimeError('Previous checkpoint changed; automatic deletion stopped.')
+            # Delete only the captured previous checkpoint IDs, after verifying the new upload.
+            self.service.files().delete(fileId=old['id']).execute()
+        print(f'Drive checkpoint saved: {path.name}', flush=True)
+
+    def download(self, name, destination):
+        from googleapiclient.http import MediaIoBaseDownload
+        matches = self.files(name)
+        if len(matches) != 1:
+            raise RuntimeError(f'Expected one {name} in the checkpoint folder; found {len(matches)}.')
+        item = matches[0]
+        destination = Path(destination)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        temporary = destination.with_name(destination.name + '.download')
+        try:
+            with temporary.open('wb') as stream:
+                transfer = MediaIoBaseDownload(stream, self.service.files().get_media(fileId=item['id']),
+                                              chunksize=64 * 1024 * 1024)
+                done = False
+                while not done:
+                    _, done = transfer.next_chunk(num_retries=3)
+            if temporary.stat().st_size != int(item['size']) or checksum(temporary) != item['md5Checksum']:
+                raise RuntimeError('Downloaded checkpoint failed verification.')
+            temporary.replace(destination)
+        finally:
+            temporary.unlink(missing_ok=True)
+
+
+def resolve_folder(service, path, wait_seconds=0):
+    """Drive folder ID for an existing path under /content/drive/MyDrive.
+
+    Folders are created through the mounted drive, never here: creating one through the
+    API while the mount is still syncing its own copy leaves two folders with the same name.
+    wait_seconds allows for that sync delay.
+    """
+    import time
+    deadline = time.monotonic() + wait_seconds
+    while True:
+        folder_id = 'root'
+        for part in Path(path).relative_to('/content/drive/MyDrive').parts:
+            escaped = part.replace(BS, BS + BS).replace("'", BS + "'")
+            matches = service.files().list(
+                q=f"'{folder_id}' in parents and name = '{escaped}' and "
+                  "mimeType = 'application/vnd.google-apps.folder' and trashed = false",
+                fields='files(id)', pageSize=100).execute().get('files', [])
+            if len(matches) > 1:
+                raise RuntimeError(f'Multiple Drive folders named {part}; use a unique path.')
+            folder_id = matches[0]['id'] if matches else None
+            if folder_id is None:
+                break
+        if folder_id is not None:
+            return folder_id
+        if time.monotonic() >= deadline:
+            raise FileNotFoundError(f'Drive folder not found: {path}')
+        time.sleep(3)

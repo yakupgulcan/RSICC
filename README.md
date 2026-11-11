@@ -49,14 +49,30 @@ python -m pip install -r requirements.txt
 The commands above use the PyTorch/torchvision versions installed in the local training environment. METEOR evaluation also requires Java; check that `java -version` works before training or evaluation.
 
 ### Training in Google Colab
-Open [RSICC_Colab_Training.ipynb](RSICC_Colab_Training.ipynb) in Colab and select a GPU runtime. Training has been run on an A100; the notebook does not require a specific Colab subscription.
+Open [RSICC_Colab_Training.ipynb](RSICC_Colab_Training.ipynb) in Colab, select a GPU runtime, edit the configuration cell and run all cells. The notebook only holds settings; the logic lives in this repository at the revision named by `REPO_REF`.
 
-1. Mount Google Drive and set `REPO_URL` and `REPO_REF` in the repository setup cell. Use the branch containing these updates, or a commit hash to reproduce a particular revision.
-2. Install dependencies and run the environment report cell. Save its output with your experiment to record Python, PyTorch, torchvision, CUDA, GPU, and the Git revision.
-3. Set the dataset download URL and Drive backup paths, then download or restore the data and preprocess it.
-4. Run training, evaluation, and the example caption command. Checkpoints and evaluation results are copied or written to the configured Drive directories.
+Each run creates `RSICC_Outputs/runs/<experiment>_seed<seed>_<time>/` in Google Drive:
 
-The example training command uses `--batch_size 32`, `--workers 4`, and `--epochs 20`. Adjust these for available memory and your experiment. Execution times depend on the runtime and data. Evaluation processes all files in the checkpoint directory, so use a directory containing only the checkpoint to evaluate when comparing individual models; result filenames are reused between checkpoints.
+| File | Content |
+| --- | --- |
+| `run.json` | Code commit, all notebook settings, dataset source and SHA-256, seeds, environment, best validation scores, test scores and the evaluated checkpoint's checksum |
+| `packages.txt` | Installed Python packages |
+| `data.log`, `train.log`, `eval.log` | Complete output of each step |
+| `training_metrics.jsonl` | Validation scores per epoch |
+| `models_checkpoint/` | Latest and best checkpoint |
+| `eval_results/<time>/` | Test scores, generated captions and the example caption |
+
+Notes:
+- `SEED` controls training. `DATA_SEED` controls caption sampling when the training files are built; keep it fixed so that runs with different seeds use identical data.
+- Checkpoints store weights and the model settings. Resuming checks that the settings match. Checkpoints written before this format can be evaluated but not resumed.
+- To resume, set `RESUME_CHECKPOINT` to the Drive path of an earlier `checkpoint_*.pth.tar` and `TOTAL_EPOCHS` to the total target. Random-number states are not restored, so a resumed run is not identical to an uninterrupted one.
+- New `train.py` options can be passed through `EXTRA_TRAIN_ARGS` without editing the notebook.
+
+### Development workflow
+- `main` always holds a working baseline. Results that are reported come from a tag or commit on GitHub, never from uncommitted code (`run.json` records `uncommitted_changes`).
+- Pipeline changes go on `infra/<topic>` branches, architecture changes on `arch/<idea>` branches. To train a branch in Colab, push it and set `REPO_REF` to its name or commit.
+- Where possible, make an architecture variant selectable by a `train.py` option, so that the baseline and the variant can run from the same commit.
+- Run the unit tests before pushing: `python -m unittest discover -s tests`.
 
 ### Data preparation
 Firstly, put the downloaded dataset in `./Levir_CC_dataset/`.

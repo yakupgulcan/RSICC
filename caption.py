@@ -10,6 +10,8 @@ from utils import *
 import torch.nn.functional as F
 from tqdm import tqdm
 import argparse
+from reproducibility import add_seed_arguments, configure_randomness
+from checkpoints import load_models
 import time
 import cv2
 import numpy
@@ -225,7 +227,9 @@ if __name__ == '__main__':
     parser.add_argument('--epoch', default="epoch", help='which')
     parser.add_argument('--beam_size', type=int, default=1, help='beam_size.')
     parser.add_argument('--path', default="./models_checkpoint/", help='model checkpoint.') #  ./models_checkpoint/data/2-times/RSICCformer_D/Simis_baseline/
+    add_seed_arguments(parser)
     args = parser.parse_args()
+    configure_randomness(args.seed, args.deterministic)
 
 
     filename = os.listdir(args.path)
@@ -238,13 +242,7 @@ if __name__ == '__main__':
         print(args.path + filename[i])
 
         # Load model
-        try:
-            checkpoint = torch.load(checkpoint_path, map_location=str(device), weights_only=False)
-        except TypeError:
-            checkpoint = torch.load(checkpoint_path, map_location=str(device))
-        encoder_image = checkpoint['encoder_image']
-        encoder_feat = checkpoint['encoder_feat']
-        decoder = checkpoint['decoder']
+        encoder_image, encoder_feat, decoder = load_models(checkpoint_path, device)
 
         evaluate_transformer(args,encoder_image,encoder_feat,decoder)
 

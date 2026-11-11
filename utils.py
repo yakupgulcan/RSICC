@@ -6,7 +6,7 @@ import torch
 # from scipy.misc import imread, imresize
 from tqdm import tqdm
 from collections import Counter
-from random import seed, choice, sample
+from random import Random
 import imageio
 from PIL import Image
 
@@ -35,10 +35,9 @@ from cv2 import resize as imresize
 
 from tqdm import tqdm
 from collections import Counter
-from random import seed, choice, sample
 
 def create_input_files(dataset, karpathy_json_path, image_folder, captions_per_image, min_word_freq, output_folder,
-                       max_len=100):
+                       max_len=100, random_seed=123):
     """
     Creates input files for training, validation, and test data.
 
@@ -121,7 +120,7 @@ def create_input_files(dataset, karpathy_json_path, image_folder, captions_per_i
 
     # Sample captions for each image, save images to HDF5 file, and captions and their lengths to JSON files
     os.makedirs(output_folder, exist_ok=True)
-    seed(123)
+    rng = Random(random_seed)
     for impaths, imcaps, split in [(train_image_paths, train_image_captions, 'TRAIN'),
                                    (val_image_paths, val_image_captions, 'VAL'),
                                    (test_image_paths, test_image_captions, 'TEST')]:
@@ -145,9 +144,9 @@ def create_input_files(dataset, karpathy_json_path, image_folder, captions_per_i
 
                 # Sample captions
                 if len(imcaps[i]) < captions_per_image:
-                    captions = imcaps[i] + [choice(imcaps[i]) for _ in range(captions_per_image - len(imcaps[i]))]
+                    captions = imcaps[i] + [rng.choice(imcaps[i]) for _ in range(captions_per_image - len(imcaps[i]))]
                 else:
-                    captions = sample(imcaps[i], k=captions_per_image)
+                    captions = rng.sample(imcaps[i], k=captions_per_image)
 
                 # Sanity check
                 assert len(captions) == captions_per_image
@@ -270,40 +269,23 @@ def clip_gradient(optimizer, grad_clip):
                 param.grad.data.clamp_(-grad_clip, grad_clip)
 
 
-def save_checkpoint(args,data_name, epoch, epochs_since_improvement, encoder_image,encoder_feat, decoder,
-                    encoder_image_optimizer,encoder_feat_optimizer, decoder_optimizer,bleu4, is_best):
+def save_checkpoint(args, data_name, state, is_best, drive_store=None):
     """
-    Saves model checkpoint.
+    Saves the latest training checkpoint and updates the best checkpoint on improvement.
 
-    :param data_name: base name of processed dataset
-    :param epoch: epoch number
-    :param epochs_since_improvement: number of epochs since last improvement in BLEU-4 score
-    :param encoder: encoder model
-    :param decoder: decoder model
-    :param encoder_optimizer: optimizer to update encoder's weights, if fine-tuning
-    :param decoder_optimizer: optimizer to update decoder's weights
-    :param bleu4: validation BLEU-4 score for this epoch
+    :param data_name: base name used in the checkpoint filename
+    :param state: weights-only training state (see train.py)
     :param is_best: is this checkpoint the best so far?
+    :param drive_store: optional verified Drive checkpoint uploader
     """
-    state = {'epoch': epoch,
-             'epochs_since_improvement': epochs_since_improvement,
-             'bleu-4': bleu4,
-             'encoder_image': encoder_image,
-             'encoder_feat': encoder_feat,
-             'decoder': decoder,
-             'encoder_image_optimizer': encoder_image_optimizer,
-             'encoder_feat_optimizer': encoder_feat_optimizer,
-             'decoder_optimizer': decoder_optimizer,
-             }
     filename = 'checkpoint_' + data_name + '.pth.tar'
-    path = args.savepath #'./models_checkpoint/mymodel/3-times/'
-    if os.path.exists(path)==False:
-        os.makedirs(path)
-        # If this checkpoint is the best so far, store a copy so it doesn't get overwritten by a worse checkpoint
-    if is_best:
-        torch.save(state, os.path.join(path, 'BEST_' + filename))
-
-    # torch.save(state, os.path.join(path, 'checkpoint_' + data_name +'_epoch_'+str(epoch) + '.pth.tar'))
+    path = args.savepath
+    os.makedirs(path, exist_ok=True)
+    names = [filename] + (['BEST_' + filename] if is_best else [])
+    for name in names:
+        torch.save(state, os.path.join(path, name))
+        if drive_store is not None:
+            drive_store.upload(os.path.join(path, name))
 
 
 class AverageMeter(object):
@@ -392,14 +374,8 @@ def get_eval_score(references, hypotheses):
     score = []
     method = []
     for scorer, method_i in scorers:
-        try:
-            score_i, scores_i = scorer.compute_score(ref, hypo)
-        except Exception as e:
-            print("Warning: {} evaluation failed: {}. Continuing with 0.0".format(method_i, e))
-            if isinstance(method_i, list):
-                score_i = [0.0] * len(method_i)
-            else:
-                score_i = 0.0
+        # A failed metric must stop the run; a silent 0.0 would be recorded as a result.
+        score_i, scores_i = scorer.compute_score(ref, hypo)
         score.extend(score_i) if isinstance(score_i, list) else score.append(score_i)
         method.extend(method_i) if isinstance(method_i, list) else method.append(method_i)
         print("{} {}".format(method_i, score_i))
