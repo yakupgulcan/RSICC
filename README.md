@@ -28,14 +28,16 @@ For more information, please see our published paper in [[IEEE](https://ieeexplo
 ### Installation and Dependencies
 This fork updates the original code for modern Python and PyTorch and adds a Colab training notebook.
 
-Training has been completed in the following environments:
+Training, evaluation and captioning have been run in the following environments:
 
 | Environment | Python | PyTorch | torchvision | PyTorch CUDA build | GPU |
 | --- | --- | --- | --- | --- | --- |
-| Local Windows virtual environment | 3.11.5 | 2.6.0+cu124 | 0.21.0+cu124 | 12.4 | Not recorded |
-| Google Colab | Not recorded | Not recorded | Not recorded | Not recorded | NVIDIA A100 |
+| Google Colab (November 2026) | 3.13.16 | 2.14.1+cu130 | 0.29.1+cu130 | 13.0 | NVIDIA A100, NVIDIA RTX PRO 6000 Blackwell |
+| Local Windows virtual environment | 3.11.5 | 2.6.0+cu124 | 0.21.0+cu124 | 12.4 | NVIDIA RTX 3060 Laptop |
 
-The local versions were read from `.venv`; successful training in both environments was reported by the fork maintainer. The CUDA version above refers to the PyTorch build, not the installed NVIDIA driver. Other version combinations have not been verified. The lower bounds in `requirements.txt` are dependency constraints, not a tested compatibility matrix.
+The Colab runs used the complete notebook workflow on LEVIR-CC. The local environment ran training, resume, evaluation and captioning on a small subset, and the unit tests. The CUDA version refers to the PyTorch build, not the installed NVIDIA driver. `requirements.txt` gives lower bounds; each run's `packages.txt` records the exact versions used.
+
+With a fixed seed, the first epoch reproduced exactly between two runs on the same GPU model. Later epochs differ slightly unless `--deterministic` is set, and results differ between GPU models.
 
 ```bash
 git clone https://github.com/yakupgulcan/RSICC.git
