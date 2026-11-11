@@ -14,6 +14,7 @@ from datasets import *
 from utils import *
 from eval import evaluate_transformer
 from reproducibility import add_seed_arguments, configure_randomness, seed_worker
+from checkpoints import MODELS, build_models, model_settings, read_checkpoint, state_dicts
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -140,25 +141,9 @@ def main(args):
     # Initialize
     # Encoder
     print('Initializing models and optimizers...', flush=True)
-    encoder_image = CNN_Encoder(NetType=args.encoder_image, method=args.decoder)
+    settings = model_settings(args, len(word_map))
+    encoder_image, encoder_feat, decoder = build_models(settings)
     encoder_image.fine_tune(args.fine_tune_encoder)
-
-    # set the encoder_dim
-    encoder_image_dim = 1024 #resnet101
-
-    if args.encoder_feat == 'MCCFormers_diff_as_Q':
-        encoder_feat = MCCFormers_diff_as_Q(feature_dim=encoder_image_dim, dropout=0.5, h=14, w=14, d_model=512, n_head=args.n_heads,
-                               n_layers=args.n_layers)
-
-    # Decoder
-    args.feature_dim_de = 1024 # 当有concat是1024,否则为512
-    if args.decoder == 'trans':
-        decoder = DecoderTransformer(feature_dim=args.feature_dim_de,
-                                     vocab_size=len(word_map),
-                                     n_head=args.n_heads,
-                                     n_layers=args.decoder_n_layers,
-                                     dropout=args.dropout)
-
 
     encoder_image_optimizer = torch.optim.Adam(params=filter(lambda p: p.requires_grad, encoder_image.parameters()),
                                          lr=args.encoder_lr) if args.fine_tune_encoder else None
@@ -178,34 +163,29 @@ def main(args):
     encoder_feat = encoder_feat.to(device)
     decoder = decoder.to(device)
 
+    optimizers = {'encoder_image': encoder_image_optimizer, 'encoder_feat': encoder_feat_optimizer,
+                  'decoder': decoder_optimizer}
+    schedulers = {'encoder_image': encoder_image_lr_scheduler, 'encoder_feat': encoder_feat_lr_scheduler,
+                  'decoder': decoder_lr_scheduler}
+
     if args.checkpoint:
-        # Existing RSICC checkpoints contain model and optimizer objects.
-        checkpoint = torch.load(args.checkpoint, map_location=device, weights_only=False)
-        encoder_image = checkpoint['encoder_image'].to(device)
-        encoder_feat = checkpoint['encoder_feat'].to(device)
-        decoder = checkpoint['decoder'].to(device)
-        encoder_image_optimizer = checkpoint['encoder_image_optimizer']
-        encoder_feat_optimizer = checkpoint['encoder_feat_optimizer']
-        decoder_optimizer = checkpoint['decoder_optimizer']
-        if args.fine_tune_encoder != (encoder_image_optimizer is not None):
-            raise ValueError('--fine_tune_encoder must match the checkpoint configuration.')
+        checkpoint, legacy = read_checkpoint(args.checkpoint, device)
+        if legacy:
+            raise ValueError('This checkpoint predates weights-only checkpoints: it can be evaluated, '
+                             'but training cannot resume from it.')
+        if checkpoint['model_settings'] != settings:
+            raise ValueError(f"Model settings differ from the checkpoint: {checkpoint['model_settings']}")
+        for name, model in zip(MODELS, (encoder_image, encoder_feat, decoder)):
+            model.load_state_dict(checkpoint['models'][name])
+        for group, saved in ((optimizers, checkpoint['optimizers']), (schedulers, checkpoint['schedulers'])):
+            for name, target in group.items():
+                if (target is None) != (saved[name] is None):
+                    raise ValueError('--fine_tune_encoder must match the checkpoint configuration.')
+                if target is not None:
+                    target.load_state_dict(saved[name])
         start_epoch = checkpoint['epoch'] + 1
         epochs_since_improvement = checkpoint['epochs_since_improvement']
-        saved_score = checkpoint['bleu-4']
-        best_bleu4 = checkpoint.get('best_bleu4',
-                                    saved_score['Bleu_4'] if isinstance(saved_score, dict) else saved_score)
-        encoder_image_lr_scheduler = (StepLR(encoder_image_optimizer, step_size=900, gamma=1)
-                                      if encoder_image_optimizer is not None else None)
-        encoder_feat_lr_scheduler = StepLR(encoder_feat_optimizer, step_size=900, gamma=1)
-        decoder_lr_scheduler = StepLR(decoder_optimizer, step_size=900, gamma=1)
-        saved_schedulers = checkpoint.get('schedulers', {})
-        for name, scheduler in [('encoder_image', encoder_image_lr_scheduler),
-                                ('encoder_feat', encoder_feat_lr_scheduler),
-                                ('decoder', decoder_lr_scheduler)]:
-            if scheduler is not None and saved_schedulers.get(name) is not None:
-                scheduler.load_state_dict(saved_schedulers[name])
-        if not saved_schedulers:
-            print('Legacy checkpoint: scheduler counters restart (current StepLR gamma is 1).')
+        best_bleu4 = checkpoint['best_bleu4']
         if args.epochs <= start_epoch:
             raise ValueError(f'--epochs must exceed {start_epoch}; it is the total epoch target.')
         print(f'Resuming at epoch {start_epoch + 1}; total epoch target: {args.epochs}.')
@@ -288,12 +268,13 @@ def main(args):
 
         # Save checkpoint
         checkpoint_name = args.encoder_image + '_'+args.encoder_feat + '_' + args.decoder #_tengxun_aggregation
-        save_checkpoint(args, checkpoint_name, epoch, epochs_since_improvement, encoder_image,encoder_feat, decoder,
-                        encoder_image_optimizer,encoder_feat_optimizer,decoder_optimizer, metrics, is_best,
-                        schedulers={'encoder_image': encoder_image_lr_scheduler,
-                                    'encoder_feat': encoder_feat_lr_scheduler,
-                                    'decoder': decoder_lr_scheduler}, best_bleu4=best_bleu4,
-                        drive_store=drive_store)
+        state = {'epoch': epoch, 'seed': args.seed, 'deterministic': args.deterministic,
+                 'epochs_since_improvement': epochs_since_improvement,
+                 'metrics': record['metrics'], 'best_bleu4': float(best_bleu4),
+                 'model_settings': settings,
+                 'models': state_dicts(dict(zip(MODELS, (encoder_image, encoder_feat, decoder)))),
+                 'optimizers': state_dicts(optimizers), 'schedulers': state_dicts(schedulers)}
+        save_checkpoint(args, checkpoint_name, state, is_best, drive_store=drive_store)
 
 
 if __name__ == '__main__':
@@ -322,9 +303,10 @@ if __name__ == '__main__':
     parser.add_argument('--encoder_lr', type=float, default=1e-4, help='learning rate for encoder if fine-tuning.')
     parser.add_argument('--decoder_lr', type=float, default=1e-4, help='learning rate for decoder.')
     parser.add_argument('--grad_clip', type=float, default=5., help='clip gradients at an absolute value of.')
-    parser.add_argument('--fine_tune_encoder', type=bool, default=False, help='whether fine-tune encoder or not')
+    parser.add_argument('--fine_tune_encoder', type=lambda value: {'true': True, 'false': False}[value.lower()],
+                        default=False, help='true or false: whether to fine-tune the image encoder')
 
-    parser.add_argument('--checkpoint', default=None, help='trusted RSICC checkpoint to resume; epochs is the total target.')
+    parser.add_argument('--checkpoint', default=None, help='checkpoint to resume; epochs is the total target.')
 
     # Validation
     parser.add_argument('--Split', default="VAL", help='which')
