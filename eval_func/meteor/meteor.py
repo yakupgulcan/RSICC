@@ -17,9 +17,16 @@ METEOR_JAR = 'meteor-1.5.jar'
 class Meteor:
 
     def __init__(self):
-        self.env = os.environ
+        self.lock = threading.Lock()
+        self.meteor_p = None
+        resource = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'paraphrase-en.gz')
+        if not os.path.isfile(resource):
+            raise FileNotFoundError('METEOR resource missing: ' + resource)
+        self.env = os.environ.copy()
         self.env['LC_ALL'] = 'en_US.UTF_8'
-        self.meteor_cmd = ['java', '-Duser.language=en', '-Duser.country=US', '-jar', '-Xmx2G', METEOR_JAR, \
+        # Reserve stdout for METEOR's protocol; JVM diagnostics belong on stderr.
+        self.meteor_cmd = ['java', '-Xlog:disable', '-Xlog:all=warning:stderr',
+                           '-Duser.language=en', '-Duser.country=US', '-Xmx2G', '-jar', METEOR_JAR, \
                            '-', '-', '-stdio', '-l', 'en', '-norm']
         self.meteor_p = subprocess.Popen(self.meteor_cmd, \
                                          cwd=os.path.dirname(os.path.abspath(__file__)), \
@@ -35,39 +42,23 @@ class Meteor:
         scores = []
 
         eval_line = 'EVAL'
-        self.lock.acquire()
-        try:
+        with self.lock:
             for i in range(len(res)):
                 assert (len(res[i]) == 1)
                 stat = self._stat(res[i][0], gts[i])
                 eval_line += ' ||| {}'.format(stat)
 
-            # Send to METEOR
+            # Flush explicitly: line buffering is not guaranteed for Windows pipes.
             self.meteor_p.stdin.write(eval_line + '\n')
             self.meteor_p.stdin.flush()
 
             # Collect segment scores
             for i in range(len(res)):
-                line = self.meteor_p.stdout.readline().strip()
-                try:
-                    score = float(line)
-                except ValueError:
-                    # If an unexpected stat line was in buffer, read next line
-                    line = self.meteor_p.stdout.readline().strip()
-                    try:
-                        score = float(line)
-                    except ValueError:
-                        score = 0.0
+                score = float(self._read_line())
                 scores.append(score)
 
             # Final score
-            line = self.meteor_p.stdout.readline().strip()
-            try:
-                final_score = float(line)
-            except ValueError:
-                final_score = float(sum(scores) / len(scores)) if scores else 0.0
-        finally:
-            self.lock.release()
+            final_score = float(self._read_line())
 
         return final_score, scores
 
@@ -76,24 +67,32 @@ class Meteor:
 
     def _stat(self, hypothesis_str, reference_list):
         # SCORE ||| reference 1 words ||| reference n words ||| hypothesis words
-        hypothesis_str = hypothesis_str.replace('|||', '').replace('\n', ' ').replace('\r', ' ').strip()
-        if not hypothesis_str:
-            hypothesis_str = "empty"
-        clean_refs = []
-        for ref in reference_list:
-            r = ref.replace('|||', '').replace('\n', ' ').replace('\r', ' ').strip()
-            if r:
-                clean_refs.append(r)
-        if not clean_refs:
-            clean_refs = ["empty"]
-        score_line = ' ||| '.join(('SCORE', ' ||| '.join(clean_refs), hypothesis_str))
+        # Empty fields or line breaks would desynchronise the line protocol.
+        def clean(text):
+            return ' '.join(text.replace('|||', ' ').split()) or 'empty'
+        score_line = ' ||| '.join(('SCORE', ' ||| '.join(clean(r) for r in reference_list),
+                                   clean(hypothesis_str)))
         self.meteor_p.stdin.write(score_line + '\n')
         self.meteor_p.stdin.flush()
-        return self.meteor_p.stdout.readline().strip()
+        return self._read_line()
+
+    def _read_line(self):
+        line = self.meteor_p.stdout.readline()
+        if not line:
+            self.meteor_p.wait()
+            error = self.meteor_p.stderr.read().strip()
+            raise RuntimeError('METEOR Java process stopped: ' + error)
+        return line.strip()
+
+    def close(self):
+        with self.lock:
+            if self.meteor_p is not None:
+                if self.meteor_p.poll() is None:
+                    self.meteor_p.kill()
+                self.meteor_p.wait()
+                for stream in (self.meteor_p.stdin, self.meteor_p.stdout, self.meteor_p.stderr):
+                    stream.close()
+                self.meteor_p = None
 
     def __del__(self):
-        self.lock.acquire()
-        self.meteor_p.stdin.close()
-        self.meteor_p.kill()
-        self.meteor_p.wait()
-        self.lock.release()
+        self.close()
