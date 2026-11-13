@@ -7,6 +7,8 @@ from torch import Tensor
 from typing import Optional
 
 from torch.nn import functional as F
+
+from harmonic import harmonic_smooth
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 class CrossTransformer(nn.Module):
@@ -86,16 +88,18 @@ class MCCFormers_diff_as_Q(nn.Module):
     RSICCFormers_diff
     """
 
-    def __init__(self, feature_dim, dropout, h, w, d_model=512, n_head=4, n_layers=3):
+    def __init__(self, feature_dim, dropout, h, w, d_model=512, n_head=4, n_layers=3, harmonic_alpha=0.0):
         """
         :param feature_dim: dimension of input features
         :param dropout: dropout rate
         :param d_model: dimension of hidden state
         :param n_head: number of heads in multi head attention
         :param n_layer: number of layers of transformer layer
+        :param harmonic_alpha: strength of the harmonic smoothing of the CNN features; 0 disables it
         """
         super(MCCFormers_diff_as_Q, self).__init__()
         self.d_model = d_model
+        self.harmonic_alpha = harmonic_alpha
 
         # n_layers = 3
         print("encoder_n_layers=", n_layers)
@@ -130,6 +134,8 @@ class MCCFormers_diff_as_Q(nn.Module):
         batch = img_feat1.size(0)
         feature_dim = img_feat1.size(1)
         w, h = img_feat1.size(2), img_feat1.size(3)
+
+        img_feat1, img_feat2 = harmonic_smooth(img_feat1, img_feat2, self.harmonic_alpha)
 
         if feature_dim == 1024:
             img_feat1 = self.projection(img_feat1)  

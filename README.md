@@ -69,6 +69,7 @@ Notes:
 - Checkpoints store weights and the model settings. Resuming checks that the settings match. Checkpoints written before this format can be evaluated but not resumed.
 - To resume, set `RESUME_CHECKPOINT` to the Drive path of an earlier `checkpoint_*.pth.tar` and `TOTAL_EPOCHS` to the total target. Random-number states are not restored, so a resumed run is not identical to an uninterrupted one.
 - New `train.py` options can be passed through `EXTRA_TRAIN_ARGS` without editing the notebook.
+- `HARMONIC_ALPHA` (`--harmonic_alpha`) smooths the two CNN feature maps on one shared 8-neighbour graph before the feature encoder (`harmonic.py`): `(I + alpha*L) S = F`. `0` is the unchanged baseline. The graph has 14x14 nodes, so useful values are roughly 0.1 to 10. The value is stored in the checkpoint, so evaluation needs no extra option.
 
 ### Development workflow
 - `main` always holds a working baseline. Results that are reported come from a tag or commit on GitHub, never from uncommitted code (`run.json` records `uncommitted_changes`).

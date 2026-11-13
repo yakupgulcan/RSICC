@@ -14,7 +14,7 @@ from datasets import *
 from utils import *
 from eval import evaluate_transformer
 from reproducibility import add_seed_arguments, configure_randomness, seed_worker
-from checkpoints import MODELS, build_models, model_settings, read_checkpoint, state_dicts
+from checkpoints import LATER_SETTINGS, MODELS, build_models, model_settings, read_checkpoint, state_dicts
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -173,7 +173,7 @@ def main(args):
         if legacy:
             raise ValueError('This checkpoint predates weights-only checkpoints: it can be evaluated, '
                              'but training cannot resume from it.')
-        if checkpoint['model_settings'] != settings:
+        if {**LATER_SETTINGS, **checkpoint['model_settings']} != settings:
             raise ValueError(f"Model settings differ from the checkpoint: {checkpoint['model_settings']}")
         for name, model in zip(MODELS, (encoder_image, encoder_feat, decoder)):
             model.load_state_dict(checkpoint['models'][name])
@@ -293,6 +293,8 @@ if __name__ == '__main__':
     parser.add_argument('--decoder_n_layers', type=int, default=1)
     parser.add_argument('--feature_dim_de', type=int, default=1024)
     parser.add_argument('--dropout', type=float, default=0.5, help='dropout')
+    parser.add_argument('--harmonic_alpha', type=float, default=0.0,
+                        help='harmonic smoothing of the CNN features on a shared graph; 0 disables it.')
 
     # Training parameters
     parser.add_argument('--epochs', type=int, default=40, help='total epoch target, including completed epochs when resuming (subject to early stopping).')

@@ -7,8 +7,12 @@ this format hold pickled model objects; they can still be evaluated.
 import torch
 
 MODEL_SETTINGS = ('encoder_image', 'encoder_feat', 'decoder', 'n_heads', 'n_layers',
-                  'decoder_n_layers', 'dropout', 'feature_dim_de')
+                  'decoder_n_layers', 'dropout', 'feature_dim_de', 'harmonic_alpha')
 MODELS = ('encoder_image', 'encoder_feat', 'decoder')
+
+
+# Settings added after checkpoints already existed; older checkpoints mean these values.
+LATER_SETTINGS = {'harmonic_alpha': 0.0}
 
 
 def model_settings(args, vocab_size):
@@ -18,6 +22,7 @@ def model_settings(args, vocab_size):
 
 
 def build_models(settings):
+    settings = {**LATER_SETTINGS, **settings}
     from models import CNN_Encoder
     from models_RSICCformerDfusion import DecoderTransformer, MCCFormers_diff_as_Q
 
@@ -28,7 +33,8 @@ def build_models(settings):
     encoder_image = CNN_Encoder(NetType=settings['encoder_image'], method=settings['decoder'])
     # The feature encoder's dropout of 0.5 is the original training setting.
     encoder_feat = MCCFormers_diff_as_Q(feature_dim=1024, dropout=0.5, h=14, w=14, d_model=512,
-                                        n_head=settings['n_heads'], n_layers=settings['n_layers'])
+                                        n_head=settings['n_heads'], n_layers=settings['n_layers'],
+                                        harmonic_alpha=settings['harmonic_alpha'])
     decoder = DecoderTransformer(feature_dim=settings['feature_dim_de'],
                                  vocab_size=settings['vocab_size'],
                                  n_head=settings['n_heads'],
